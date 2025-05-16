@@ -56,7 +56,6 @@ Parameters (form-data):
 - `image`: The image file to upscale
 - `scale_factor`: The scale factor to use (2 or 4, default: 4)
 - `outscale`: The final output scale (default: 4.0)
-- `face_enhance`: Whether to enhance faces (true/false, default: false)
 
 ### Outpaint Image
 
@@ -66,9 +65,7 @@ POST /outpaint
 
 Parameters (form-data):
 - `image`: The image file to outpaint
-- `scale_factor`: The scale factor to use (2 or 4, default: 4)
-- `outscale`: The final output scale (default: 1.0)
-- `padding`: The padding to add around the image in pixels (default: 64)
+- `format`: Landscape to Portrait or Portrait to Landscape (default: Landscape to Portrait)
 
 ## Integration with Frontend
 
