@@ -1,6 +1,6 @@
 # Image Upscaling and Outpainting Backend API
 
-This is the backend API for the Image Upscaling and Outpainting webapp. It uses Real-ESRGAN models to enhance and outpaint images.
+This is the backend API for the Image Upscaling and Outpainting webapp. It uses Real-ESRGAN models for image upscaling and SDXL for high-quality outpainting.
 
 ## Setup Instructions
 
@@ -31,7 +31,7 @@ This is the backend API for the Image Upscaling and Outpainting webapp. It uses 
 Navigate to the `backend` directory and run the FastAPI application using Uvicorn:
 
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host localhost --port 8000
 ```
 
 The API will be available at `http://localhost:8000`.

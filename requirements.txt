@@ -7,3 +7,8 @@ torchvision==0.11.1
 Pillow==9.0.1
 requests==2.27.1
 python-multipart==0.0.9
+# SDXL dependencies
+transformers
+accelerate
+diffusers
+huggingface-hub
