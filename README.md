@@ -29,7 +29,7 @@ flowchart LR
 
 | Input Image | Upscaled Output |
 |-------------|----------------|
-| ![input](uploads/0af34bf5-d8bd-4ca1-aea0-a7b64848a1a6_input.png) | ![output](results/0af34bf5-d8bd-4ca1-aea0-a7b64848a1a6_output.png) |
+| ![input](uploads/63b05aa6-105f-4807-8529-c7654fcdf472_input.png) | ![output](results/63b05aa6-105f-4807-8529-c7654fcdf472_output.png) |
 
 ### Image Outpainting
 
