@@ -18,11 +18,10 @@ The upscaling pipeline leverages Real-ESRGAN for high-quality, artifact-free ima
 
 ```mermaid
 flowchart LR
-    A[User Uploads Image] --> B[Preprocessing]
-    B --> C[Model Selection x2/x4]
-    C --> D[Real-ESRGAN Inference]
-    D --> E[Postprocessing]
-    E --> F[Return Base64 Image]
+    A[User Uploads Image] --> B[Model Selection x2/x4]
+    B --> C[Real-ESRGAN Inference]
+    C --> D[Postprocessing]
+    D --> E[Return Base64 Image]
 ```
 
 **Example:**
