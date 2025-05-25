@@ -85,7 +85,7 @@ flowchart LR
 
 ### Running the API
 
-Navigate to the `backend` directory and run the FastAPI application using Uvicorn:
+Navigate to the `root` directory and run the FastAPI application using Uvicorn:
 
 ```bash
 uvicorn main:app --reload --host localhost --port 8000
