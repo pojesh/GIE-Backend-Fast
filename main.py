@@ -5,7 +5,6 @@ import cv2
 from cv2.detail import resultRoi
 import numpy as np
 import torch
-import argparse
 import datetime
 import base64
 import uuid
@@ -27,14 +26,14 @@ import torchvision.transforms as T
 #from controlnet_union import ControlNetModel_Union
 #from pipeline_fill_sd_xl import StableDiffusionXLFillPipeline
 
-from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel 
+#from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel 
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import gc
-from diffusers import DiffusionPipeline
+#from diffusers import DiffusionPipeline
 
 # --- Compatibility and Path Fixes ---
 warnings.filterwarnings("ignore")
