@@ -91,6 +91,10 @@ Navigate to the `backend` directory and run the FastAPI application using Uvicor
 ```bash
 uvicorn main:app --reload --host localhost --port 8000
 ```
+or
+```bash
+run_server.bat
+```
 
 The API will be available at `http://localhost:8000`.
 
