@@ -19,7 +19,7 @@ The upscaling pipeline leverages Real-ESRGAN for high-quality, artifact-free ima
 ```mermaid
 flowchart LR
     A[User Uploads Image] --> B[Preprocessing]
-    B --> C[Model Selection (x2/x4)]
+    B --> C[Model Selection x2/x4]
     C --> D[Real-ESRGAN Inference]
     D --> E[Postprocessing]
     E --> F[Return Base64 Image]
@@ -33,7 +33,7 @@ flowchart LR
 
 ### Image Outpainting
 
-The outpainting pipeline uses Stable Diffusion Inpainting to extend images beyond their original borders, generating new content that blends seamlessly with the original. The process is as follows:
+The outpainting pipeline uses Stable Diffusion 2.0 Inpainting to extend images beyond their original borders, generating new content that blends seamlessly with the original. The process is as follows:
 
 1. **Upload**: User uploads an image via the `/outpaint` endpoint, specifying `target_width` and `target_height`.
 2. **Canvas Creation**: The backend creates a larger canvas and places the original image in the center, using edge extension for seamless blending.
