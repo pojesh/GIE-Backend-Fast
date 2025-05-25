@@ -57,7 +57,7 @@ flowchart LR
 
 | Original Image | Outpainted Output |
 |---------------|-------------------|
-| ![input](uploads/63b05aa6-105f-4807-8529-c7654fcdf472_input.png) | ![output](outputs/portrait_outpaint.png) |
+| ![input](uploads/63b05aa6-105f-4807-8529-c7654fcdf472_input.png) | ![output](outputs/tree_outpaint.png) |
 
 ## Setup Instructions
 
