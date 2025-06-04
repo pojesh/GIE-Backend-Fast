@@ -5,6 +5,7 @@ import cv2
 from cv2.detail import resultRoi
 import numpy as np
 import torch
+import argparse
 import datetime
 import base64
 import uuid
@@ -26,14 +27,14 @@ import torchvision.transforms as T
 #from controlnet_union import ControlNetModel_Union
 #from pipeline_fill_sd_xl import StableDiffusionXLFillPipeline
 
-#from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel 
+from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel 
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import gc
-#from diffusers import DiffusionPipeline
+from diffusers import DiffusionPipeline
 
 # --- Compatibility and Path Fixes ---
 warnings.filterwarnings("ignore")
@@ -93,14 +94,6 @@ def initiate_sd(device="cuda", model_version="2.0", use_optimized_vae=True):
         use_optimized_vae = use_optimized_vae
         #self.processor, self.model = self._create_caption_augmentor()
         
-        # Scene type detection keywords for better prompting
-        scene_keywords = {
-            'urban': ['street', 'road', 'car', 'building', 'city', 'traffic', 'sidewalk'],
-            'nature': ['tree', 'grass', 'sky', 'field', 'forest', 'mountain', 'landscape'],
-            'indoor': ['room', 'wall', 'furniture', 'interior', 'house'],
-            'portrait': ['person', 'face', 'woman', 'man', 'people', 'human'],
-            'animal': ['cat', 'dog', 'pet', 'animal', 'fur'],
-        }
 def _setup_device(preferred_device):
         """Setup and verify PyTorch device."""
         if preferred_device == "cuda" and torch.cuda.is_available():
@@ -263,6 +256,7 @@ async def upscale_image_api(
         except Exception:
             pass
 
+# Outpaint pipeline
  
 def _set_scheduler(scheduler_type):
         """Set the desired scheduler."""
@@ -276,7 +270,7 @@ def _set_scheduler(scheduler_type):
         except Exception as e:
             print(f"⚠️  Error setting scheduler: {e}. Using default.")
 
-def analyze_image_content(image):
+def analyze_image_content(image): #for prompt generation
         """Analyze image content to determine scene type and generate appropriate prompts."""
         # Convert to numpy for analysis
         img_array = np.array(image)
@@ -295,240 +289,15 @@ def analyze_image_content(image):
             scene_type = "nature"
         elif blue_dominance:
             scene_type = "sky"
-        elif brightness < 80:
-            scene_type = "indoor"
+        
         
         return scene_type, brightness, avg_colors
 
-
-def generate_smart_prompt(image, custom_prompt=""):
-        """Generate intelligent prompts based on image analysis."""
-        if custom_prompt.strip():
-            return custom_prompt
-
-        #caption = self.get_image_caption(image)
-        
-
-        scene_type, brightness, avg_colors = analyze_image_content(image)
-        
-        # Base quality terms
-        base_prompt = "photorealistic, high quality, detailed, 4k resolution, professional photography"
-        
-        # Scene-specific prompts
-        scene_prompts = {
-            "nature": "natural landscape, trees, grass, sky, outdoor scenery, environmental continuity",
-            "sky": "clear sky, clouds, natural lighting, atmospheric perspective, horizon",
-            "indoor": "consistent lighting",
-            "general": "seamless extension, consistent style, natural continuation"
-        }
-        
-        # Lighting prompts based on brightness
-        if brightness > 150:
-            lighting = "bright lighting, daylight, well-lit"
-        elif brightness < 80:
-            lighting = "ambient lighting, soft shadows, moody atmosphere"
-        else:
-            lighting = "natural lighting, balanced exposure"
-        
-        final_prompt = f"{base_prompt}, {scene_prompts.get(scene_type, scene_prompts['general'])}, {lighting}, seamless blending"
-        #final_prompt += ", " + caption  # Add caption to the end for more context
-        print(f"🎨 Generated prompt for {scene_type} scene: {final_prompt}...")
-        return final_prompt
-
-def create_seamless_canvas(image, target_width, target_height):
-        """Create canvas with intelligent padding for seamless outpainting."""
-        original_width, original_height = image.size
-        
-        # Calculate optimal scaling
-        scale_w = target_width / original_width
-        scale_h = target_height / original_height
-        scale = min(scale_w, scale_h) * 0.8  # Leave room for outpainting
-        
-        new_width = int(original_width * scale)
-        new_height = int(original_height * scale)
-        
-        # Ensure minimum size for the original content
-        min_dimension = min(target_width, target_height) // 2
-        if new_width < min_dimension or new_height < min_dimension:
-            scale = min_dimension / min(original_width, original_height)
-            new_width = int(original_width * scale)
-            new_height = int(original_height * scale)
-        
-        # Resize image with high quality
-        resized_image = image.resize((new_width, new_height), Image.LANCZOS)
-        
-        # Center positioning
-        x_offset = (target_width - new_width) // 2
-        y_offset = (target_height - new_height) // 2
-        
-        # Create canvas with neutral background
-        canvas = Image.new("RGB", (target_width, target_height), (128, 128, 128))
-        
-        # Use edge extension for better seamless results
-        canvas = _create_edge_extended_canvas(
-            resized_image, canvas, x_offset, y_offset, target_width, target_height
-        )
-        
-        return canvas, (x_offset, y_offset), (new_width, new_height)
-
-def _create_edge_extended_canvas(image, canvas, x_offset, y_offset, target_width, target_height):
-        """Create canvas with intelligent edge extension."""
-        img_width, img_height = image.size
-        
-        # Create extended versions of edges
-        edge_size = 50  # Pixels to extend
-        
-        # Top edge extension
-        if y_offset > 0:
-            top_strip = image.crop((0, 0, img_width, min(edge_size, img_height//4)))
-            top_extended = top_strip.resize((target_width, y_offset), Image.LANCZOS)
-            canvas.paste(top_extended, (0, 0))
-        
-        # Bottom edge extension
-        bottom_start = y_offset + img_height
-        if bottom_start < target_height:
-            bottom_strip = image.crop((0, max(0, img_height-edge_size), img_width, img_height))
-            bottom_extended = bottom_strip.resize((target_width, target_height - bottom_start), Image.LANCZOS)
-            canvas.paste(bottom_extended, (0, bottom_start))
-        
-        # Left edge extension
-        if x_offset > 0:
-            left_strip = image.crop((0, 0, min(edge_size, img_width//4), img_height))
-            left_extended = left_strip.resize((x_offset, img_height), Image.LANCZOS)
-            canvas.paste(left_extended, (0, y_offset))
-        
-        # Right edge extension
-        right_start = x_offset + img_width
-        if right_start < target_width:
-            right_strip = image.crop((max(0, img_width-edge_size), 0, img_width, img_height))
-            right_extended = right_strip.resize((target_width - right_start, img_height), Image.LANCZOS)
-            canvas.paste(right_extended, (right_start, y_offset))
-        
-        # Paste the original image on top
-        canvas.paste(image, (x_offset, y_offset))
-        
-        return canvas
 
 def ensure_odd_kernel_size(size):
     """Ensure kernel size is odd and at least 3."""
     size = max(3, int(size))
     return size if size % 2 == 1 else size + 1
-
-def create_professional_mask(canvas_size, content_offset, content_size, feather_radius=32):
-    """Create a professional mask with gradient transitions - FIXED VERSION."""
-    width, height = canvas_size
-    x_offset, y_offset = content_offset
-    content_width, content_height = content_size
-    
-    # Create mask with gradient
-    mask = np.ones((height, width), dtype=np.float32) * 255
-    
-    # Create content preservation area
-    content_mask = np.zeros((content_height, content_width), dtype=np.float32)
-    
-    # Add gradient borders to content mask
-    border_size = min(feather_radius, content_width//8, content_height//8)
-    
-    # Create gradient borders
-    for i in range(border_size):
-        alpha = i / border_size
-        # Top border
-        if i < content_height:
-            content_mask[i, :] = alpha * 255
-        # Bottom border  
-        if content_height - 1 - i >= 0:
-            content_mask[content_height - 1 - i, :] = alpha * 255
-        # Left border
-        if i < content_width:
-            content_mask[:, i] = np.maximum(content_mask[:, i], alpha * 255)
-        # Right border
-        if content_width - 1 - i >= 0:
-            content_mask[:, content_width - 1 - i] = np.maximum(content_mask[:, content_width - 1 - i], alpha * 255)
-    
-    # Place content mask on main mask
-    mask[y_offset:y_offset+content_height, x_offset:x_offset+content_width] = content_mask
-    
-    # Apply Gaussian blur for smooth transitions - FIXED KERNEL SIZE
-    kernel_size = max(3, feather_radius * 2 + 1)
-    if kernel_size % 2 == 0:  # Ensure odd kernel size
-        kernel_size += 1
-    
-    mask = cv2.GaussianBlur(mask, (kernel_size, kernel_size), max(1.0, feather_radius/3))
-    
-    # Convert back to PIL
-    mask_pil = Image.fromarray(mask.astype(np.uint8), mode='L')
-    
-    return mask_pil
-
-def generate_outpainting(image, mask, prompt="", negative_prompt="", 
-                           guidance_scale=7.5, steps=50, seed=None):
-        """Perform high-quality outpainting generation."""
-        try:
-            # Set up generator with seed
-            generator = None
-            if seed is not None:
-                generator = torch.Generator(device="cuda").manual_seed(seed)
-                print(f"🎲 Using seed: {seed}")
-            
-            # Generate smart prompt if not provided
-            if not prompt.strip():
-                prompt = generate_smart_prompt(image)
-            
-            # Enhanced negative prompt
-            if not negative_prompt.strip():
-                negative_prompt = (
-                    "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, "
-                    "cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, "
-                    "username, blurry, duplicate, artifacts, seams, visible boundaries, inconsistent lighting, "
-                    "unnatural colors, distorted perspective, repetitive patterns, tiling artifacts"
-                )
-            
-            print(f"🎨 Generating with {steps} steps, guidance scale {guidance_scale}")
-            print(f"📝 Prompt: {prompt}...")
-            
-            # Generate with higher quality settings
-            result = sd_pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image=image,
-                mask_image=mask,
-                height=image.height,
-                width=image.width,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-                strength=0.95,  # Higher strength for better outpainting
-            ).images[0]
-            
-            return result
-            
-        except Exception as e:
-            print(f"❌ Error during generation: {e}")
-            return None
-
-def post_process_result(result, original_canvas):
-        """Apply post-processing to improve result quality."""
-        try:
-            # Convert to numpy for processing
-            result_array = np.array(result)
-            canvas_array = np.array(original_canvas)
-            
-            # Enhance contrast and saturation slightly
-            result_enhanced = Image.fromarray(result_array)
-            
-            # Slight contrast enhancement
-            enhancer = ImageEnhance.Contrast(result_enhanced)
-            result_enhanced = enhancer.enhance(1.1)
-            
-            # Slight saturation enhancement
-            enhancer = ImageEnhance.Color(result_enhanced)
-            result_enhanced = enhancer.enhance(1.05)
-            
-            return result_enhanced
-            
-        except Exception as e:
-            print(f"⚠️  Post-processing failed: {e}")
-            return result
 
 def save_result(image, output_dir="outputs", prefix="outpainted"):
         """Save the result with timestamp."""
@@ -559,6 +328,7 @@ def cleanup():
             print("🧹 Cleaned up resources and freed memory")
         except Exception as e:
             print(f"⚠️  Error during cleanup: {e}")
+
 def create_intelligent_canvas(image, target_width, target_height):
     """Create canvas with intelligent positioning and background."""
     original_width, original_height = image.size
@@ -764,13 +534,12 @@ def generate_enhanced_prompt(image, custom_prompt=""):
     scene_type, brightness, avg_colors = analyze_image_content(image)
     
     # Enhanced base quality terms
-    base_prompt = "masterpiece, best quality, highly detailed, photorealistic, 8k uhd, professional photography"
+    base_prompt = "masterpiece, best quality, highly detailed, photorealistic, 4k uhd, professional photography"
     
     # More sophisticated scene analysis
     scene_prompts = {
         "nature": "natural landscape, lush vegetation, organic terrain, environmental harmony, seamless wilderness",
         "sky": "atmospheric perspective, natural sky gradient, cloud formations, horizon continuity",
-        "indoor": "architectural consistency, interior design harmony, ambient lighting",
         "general": "coherent composition, natural extension, stylistic continuity"
     }
     
@@ -790,7 +559,7 @@ def generate_enhanced_prompt(image, custom_prompt=""):
     return final_prompt
 
 def generate_enhanced_negative_prompt():
-    """Generate comprehensive negative prompt to avoid common issues."""
+    
     return (
         "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, "
         "cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, "
@@ -819,8 +588,8 @@ def generate_outpainting_enhanced(image, mask, prompt="", negative_prompt="",
         
         # Optimized generation parameters
         result = sd_pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
+            prompt=generate_enhanced_prompt(image, prompt),
+            negative_prompt=generate_enhanced_negative_prompt(),
             image=image,
             mask_image=mask,
             height=image.height,
