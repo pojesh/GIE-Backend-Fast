@@ -1,3 +1,4 @@
+# app.py
 import io
 import base64
 import torch
@@ -12,291 +13,95 @@ from huggingface_hub import hf_hub_download
 from contextlib import asynccontextmanager
 import logging
 
-import os
-import sys
-import warnings
-import cv2
-from cv2.detail import resultRoi
-import datetime
-import uuid
-from pathlib import Path
-from PIL import ImageEnhance, ImageFilter, ImageOps
-import random
-import torchvision.transforms as T
-import gc
-
-#sdxl
+# Import the custom modules
 from controlnet_union import ControlNetModel_Union
 from pipeline_fill_sd_xl import StableDiffusionXLFillPipeline
-
-# --- Compatibility and Path Fixes ---
-warnings.filterwarnings("ignore")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Error fix for torch transformer for realesrgan
-def apply_realesrgan_fix():
-    import types
-    sys.modules['torchvision.transforms.functional_tensor'] = types.SimpleNamespace(
-        rgb_to_grayscale=lambda x: x.mean(dim=1, keepdim=True)
-    )
-
-def remove_realesrgan_fix():
-    if 'torchvision.transforms.functional_tensor' in sys.modules:
-        del sys.modules['torchvision.transforms.functional_tensor']
-
-# Add Real-ESRGAN to path
-REALESRGAN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Real-ESRGAN-master')
-if REALESRGAN_DIR not in sys.path:
-    sys.path.append(REALESRGAN_DIR)
-
-
-# --- FastAPI App Setup ---
-app = FastAPI(
-    title="Galaxy Image Enhancer API",
-    description="API for upscaling and outpainting images using Real-ESRGAN and SD.",
-    version="1.0.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000","*"],  # Adjust for production
-    allow_credentials=True,
-    allow_methods=["POST","GET","OPTIONS"],
-    allow_headers=["*"],
-)
-
-# --- Directories ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-RESULT_FOLDER = os.path.join(BASE_DIR, 'results')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RESULT_FOLDER, exist_ok=True)
-
-# --- Model Initialization ---
-upsampler_x4 = None
-upsampler_x2 = None
+# Global variables for models
 pipe = None
 device = None
 dtype = None
 
-def initialize_model(model_name):
-
-    try:
-        apply_realesrgan_fix()
-        from basicsr.archs.rrdbnet_arch import RRDBNet
-        from realesrgan.utils import RealESRGANer
-    except Exception as e:
-        print("Error importing Real-ESRGAN modules:", e)
-        raise
-
-    """Initialize the Real-ESRGAN model"""
-    if model_name == 'RealESRGAN_x4plus':
-        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-        scale = 4
-        #model_path = os.path.join(REALESRGAN_DIR, 'weights', 'RealESRGAN_x4plus.pth')
-        model_path = "weights/RealESRGAN_x4plus.pth"
-    elif model_name == 'RealESRGAN_x2plus':
-        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
-        scale = 2
-        #model_path = os.path.join(REALESRGAN_DIR, 'weights', 'RealESRGAN_x2plus.pth')
-        model_path = "weights/RealESRGAN_x2plus.pth"
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load models on startup, cleanup on shutdown"""
+    global pipe, device, dtype
+    
+    logger.info("Loading models...")
+    
+    # Initialize CUDA if available
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.float16
     else:
-        raise ValueError(f'Model {model_name} not supported')
-
-    if not os.path.isfile(model_path):
-        raise FileNotFoundError(f'Model file {model_path} not found. Please download it first.')
-
-    upsampler = RealESRGANer(
-        scale=scale,
-        model_path=model_path,
-        model=model,
-        tile=400,  # Use tile to avoid CUDA OOM
-        tile_pad=10,
-        pre_pad=0,
-        half=True  # Use full precision for compatibility
+        device = "cpu"
+        dtype = torch.float32
+    
+    # Load ControlNet
+    config_file = hf_hub_download(
+        "xinsir/controlnet-union-sdxl-1.0",
+        filename="config_promax.json",
     )
     
-    return upsampler
-
-
-@app.on_event("startup")
-def load_models():
-    global upsampler_x4, upsampler_x2, pipe, device, dtype
-    try:
-        logger.info("Loading models...")
-
-        # Initialize CUDA if available
-        if torch.cuda.is_available():
-            device = "cuda"
-            dtype = torch.float16
-        else:
-            device = "cpu"
-            dtype = torch.float32
+    config = ControlNetModel_Union.load_config(config_file)
+    controlnet_model = ControlNetModel_Union.from_config(config)
     
-        # Load SDXL models
-        
-        # Load ControlNet
-        config_file = hf_hub_download(
-            "xinsir/controlnet-union-sdxl-1.0",
-            filename="config_promax.json",
-        )
-        
-        config = ControlNetModel_Union.load_config(config_file)
-        controlnet_model = ControlNetModel_Union.from_config(config)
-        
-        # Load the state dictionary
-        model_file = hf_hub_download(
-            "xinsir/controlnet-union-sdxl-1.0",
-            filename="diffusion_pytorch_model_promax.safetensors",
-        )
-        state_dict = load_state_dict(model_file)
-        
-        # Extract the keys from the state_dict
-        loaded_keys = list(state_dict.keys())
-        
-        # Load pretrained model
-        result = ControlNetModel_Union._load_pretrained_model(
-            controlnet_model, state_dict, model_file, "xinsir/controlnet-union-sdxl-1.0", loaded_keys
-        )
-        
-        model = result[0]
-        model = model.to(device=device, dtype=dtype)
-        
-        # Load VAE
-        vae = AutoencoderKL.from_pretrained(
-            "madebyollin/sdxl-vae-fp16-fix", torch_dtype=dtype
-        ).to(device)
-        
-        # Load pipeline
-        pipe = StableDiffusionXLFillPipeline.from_pretrained(
-            "SG161222/RealVisXL_V5.0_Lightning",
-            torch_dtype=dtype,
-            vae=vae,
-            controlnet=model,
-            variant="fp16" if dtype == torch.float16 else None,
-        ).to(device)
-        
-        pipe.scheduler = TCDScheduler.from_config(pipe.scheduler.config)
-        
-        #logger.info("Models loaded successfully!")
-
-        # Load Real-ESRGAN models
-
-        upsampler_x4 = initialize_model('RealESRGAN_x4plus')
-        upsampler_x2 = initialize_model('RealESRGAN_x2plus')
-
-        remove_realesrgan_fix()
-
-        print("Models loaded successfully!")
-
-    except Exception as e:
-        print(f"Error loading models: {e}")
-        print("Please make sure the model weights are downloaded and placed in the correct directory.")
-        print("You can download them from:")
-        print("- RealESRGAN_x4plus.pth: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth")
-        print("- RealESRGAN_x2plus.pth: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth")
-        upsampler_x4 = None
-        upsampler_x2 = None
-
-        pipe = None
-
-
-@app.get("/", tags=["General"])
-async def read_root():
-    return {"message": "Welcome to the Galaxy Image Enhancer API"}
-
-@app.get("/health", tags=["General"])
-async def health_check():
-    global upsampler_x4, upsampler_x2 #, sd_pipe
-    return {
-        'status': 'ok',
-        'models_loaded': {
-            'x4plus': upsampler_x4 is not None,
-            'x2plus': upsampler_x2 is not None,
-            'sdxl_outpaint': pipe is not None
-        }
-    }
-
-
-# --- UPSCALER MODEL ENDPOINTS ---
-@app.post("/upscale", tags=["Image Processing"])
-async def upscale_image_api(
-    image: UploadFile = File(...),
-    scale_factor: str = Form("4"),
-    outscale: float = Form(4.0)
-):
-
+    # Load the state dictionary
+    model_file = hf_hub_download(
+        "xinsir/controlnet-union-sdxl-1.0",
+        filename="diffusion_pytorch_model_promax.safetensors",
+    )
+    state_dict = load_state_dict(model_file)
     
-    global upsampler_x4, upsampler_x2
-    if upsampler_x4 is None or upsampler_x2 is None:
-        return JSONResponse(content={'error': 'Models not loaded. Please check server logs.'}, status_code=500)
+    # Extract the keys from the state_dict
+    loaded_keys = list(state_dict.keys())
+    
+    # Load pretrained model
+    result = ControlNetModel_Union._load_pretrained_model(
+        controlnet_model, state_dict, model_file, "xinsir/controlnet-union-sdxl-1.0", loaded_keys
+    )
+    
+    model = result[0]
+    model = model.to(device=device, dtype=dtype)
+    
+    # Load VAE
+    vae = AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=dtype
+    ).to(device)
+    
+    # Load pipeline
+    pipe = StableDiffusionXLFillPipeline.from_pretrained(
+        "SG161222/RealVisXL_V5.0_Lightning",
+        torch_dtype=dtype,
+        vae=vae,
+        controlnet=model,
+        variant="fp16" if dtype == torch.float16 else None,
+    ).to(device)
+    
+    pipe.scheduler = TCDScheduler.from_config(pipe.scheduler.config)
+    
+    logger.info("Models loaded successfully!")
+    
+    yield
+    
+    # Cleanup
+    logger.info("Shutting down...")
 
-    if not image.filename:
-        return JSONResponse(content={'error': 'No image selected'}, status_code=400)
+app = FastAPI(lifespan=lifespan)
 
-    try:
-        # Save the uploaded image
-        img_uuid = str(uuid.uuid4())
-        input_path = os.path.join(UPLOAD_FOLDER, f"{img_uuid}_input.png")
-        output_path = os.path.join(RESULT_FOLDER, f"{img_uuid}_output.png")
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
-        img = Image.open(io.BytesIO(await image.read()))
-        img.save(input_path)
-
-        img_cv = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
-        if img_cv is None:
-            return JSONResponse(content={'error': 'Failed to read image'}, status_code=500)
-
-        upsampler = upsampler_x4 if scale_factor == '4' else upsampler_x2
-
-        # Process the image
-        output, _ = upsampler.enhance(img_cv, outscale=outscale)
-
-        # Save the output image
-        cv2.imwrite(output_path, output)
-        cleanup()
-
-        # Return the result image as base64
-        with open(output_path, 'rb') as f:
-            img_data = f.read()
-            encoded_img = base64.b64encode(img_data).decode('utf-8')
-
-        
-
-        return JSONResponse(content={
-            'success': True,
-            'image': encoded_img,
-            'message': 'Image upscaled successfully'
-        })
-    except Exception as e:
-        return JSONResponse(content={'error': str(e)}, status_code=500)
-    finally:
-        try:
-            if os.path.exists(input_path):
-                os.remove(input_path)
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        except Exception:
-            pass
-
-# Cuda memory clean up code
-def cleanup():
-        """Clean up resources and free memory."""
-        try:
-            gc.collect()
-
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-            
-            print("🧹 Cleaned up resources and freed memory")
-        except Exception as e:
-            print(f"⚠️  Error during cleanup: {e}")
-
-
-# --- OUTPAINTING PIPELINE DEFINITION ---
 def prepare_image_and_mask(image, width, height, overlap_percentage=10, resize_option="Full", 
                           custom_resize_percentage=50, alignment="Middle", 
                           overlap_left=True, overlap_right=True, overlap_top=True, overlap_bottom=True):
@@ -466,8 +271,6 @@ def process_outpaint(image, width, height, num_inference_steps=8, prompt_input="
     
     return cnet_image
 
-# --- OUTPAINTING MODEL ENDPOINTS ---
-
 @app.post("/outpaint")
 async def outpaint(
     image: UploadFile = File(...),
@@ -511,8 +314,6 @@ async def outpaint(
                 status_code=400
             )
         
-     
-
         # Process the image
         logger.info(f"Processing outpaint: {pil_image.width}x{pil_image.height} -> {width}x{height}")
         result_image = process_outpaint(pil_image, width, height)
@@ -522,6 +323,9 @@ async def outpaint(
         result_image.save(output_buffer, format='PNG')
         output_buffer.seek(0)
 
+        #clear cuda cache
+        torch.cuda.empty_cache()
+        
         # Encode to base64
         base64_image = base64.b64encode(output_buffer.read()).decode('utf-8')
         
@@ -533,13 +337,6 @@ async def outpaint(
             }
         )
         
-    except KeyboardInterrupt:
-        print("\n⏹️  Process interrupted by user")
-        return JSONResponse(
-            content={"success": False, "error": "Process interrupted"},
-            status_code=499
-        )
-
     except Exception as e:
         logger.error(f"Error in outpaint: {str(e)}")
         return JSONResponse(
@@ -547,15 +344,11 @@ async def outpaint(
             status_code=500
         )
 
-    finally:
-        cleanup()
-        
-        pass
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "healthy", "models_loaded": pipe is not None}
 
-
-# Initiate server
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-    # python -m uvicorn main:app --reload --host localhost --port 8000
